@@ -128,13 +128,20 @@ def test_gpt_4o_mini_public_invoke_follows_source_responses_contract(
 def test_embedding_001_public_invoke_preserves_retrieval_purpose(input_type, task_type, upstream):
     model_id = "gemini-embedding-001"
     model = TokenerTextEmbeddingModel(model_schemas=[schema("text_embedding", model_id)])
-    response_body = json.loads(upstream.return_value.content)
-    response_body["usage"]["total_tokens"] = 777
-    upstream.return_value._content = json.dumps(response_body).encode()
+    replies = []
+    for body in (
+        {"totalTokens": 777},
+        {"embeddings": [{"values": [0.1, 0.2], "statistics": {"tokenCount": 777}}]},
+    ):
+        reply = requests.Response()
+        reply.status_code = 200
+        reply._content = json.dumps(body).encode()
+        replies.append(reply)
+    upstream.side_effect = replies
     result = model.invoke(model_id, {"api_key": "test"}, ["same text"], input_type=input_type)
-    body = upstream.call_args.kwargs["json"]
-    assert body["input"] == ["same text"]
-    assert body["task_type"] == task_type
+    body = upstream.call_args.kwargs["json"]["requests"][0]
+    assert body["content"]["parts"] == [{"text": "same text"}]
+    assert body["taskType"] == task_type
     assert result.usage.tokens == 777
 
 
