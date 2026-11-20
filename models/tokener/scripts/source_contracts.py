@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 
@@ -10,6 +11,8 @@ SOURCE_PROVIDERS = {
     "openai": "openai",
     "gemini": "gemini",
     "anthropic": "anthropic",
+    "tongyi": "tongyi",
+    "x": "xai",
 }
 RULE_FIELDS = {
     "name",
@@ -61,6 +64,7 @@ def load_source_contracts(root: Path) -> dict:
 
 
 def apply_source_contracts(files: dict[str, str], contracts: dict) -> dict[str, str]:
+    providers = {}
     for name, body in files.items():
         if name.startswith("_"):
             continue
@@ -108,4 +112,7 @@ def apply_source_contracts(files: dict[str, str], contracts: dict) -> dict[str, 
                 body,
             )
         files[name] = body
+        if contract["family"] == "tongyi" and not identity.startswith(("qwen", "qwq-", "qvq-")):
+            providers[identity] = "tongyi"
+    files["_provider_models.json"] = json.dumps(providers, sort_keys=True, indent=2) + "\n"
     return files

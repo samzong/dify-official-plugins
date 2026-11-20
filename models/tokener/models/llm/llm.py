@@ -2,6 +2,7 @@ import json
 import math
 import uuid
 from collections.abc import Generator
+from pathlib import Path
 
 import requests
 from dify_plugin import OAICompatLargeLanguageModel
@@ -10,7 +11,6 @@ from dify_plugin.entities.model.llm import LLMResult, LLMResultChunk, LLMResultC
 from dify_plugin.entities.model.message import (
     AssistantPromptMessage,
     PromptMessage,
-    PromptMessageContentType,
     PromptMessageFunction,
     PromptMessageTool,
 )
@@ -21,28 +21,41 @@ from models._credentials import ENDPOINT_URL, validate_model_access
 from models.llm import (
     _anthropic_format,
     _anthropic_messages,
+    _chat_compat,
     _gemini_native,
     _openai_responses,
     _wire,
 )
 
+CHAT_FIELDS = {
+    "audio": _chat_compat.AUDIO_FIELDS,
+    "tongyi": _chat_compat.TONGYI_FIELDS,
+    "xai": _chat_compat.XAI_FIELDS,
+}
 NATIVE_FIELDS = {
     "openai": _openai_responses.FIELDS | {"seed"},
     "anthropic": _anthropic_messages.FIELDS,
     "gemini": _gemini_native.FIELDS,
 }
+SOURCE_MODEL_PROVIDERS = json.loads(Path(__file__).with_name("_provider_models.json").read_text())
 
 
 def model_family(model: str) -> str:
+    if model in SOURCE_MODEL_PROVIDERS:
+        return SOURCE_MODEL_PROVIDERS[model]
     base = _openai_responses.base_model(model)
     if base.startswith("gpt-audio"):
-        return ""
+        return "audio"
     if base.startswith("gpt-") or (len(base) > 1 and base[0] == "o" and base[1].isdigit()):
         return "openai"
     if model.startswith("claude-"):
         return "anthropic"
     if model.startswith("gemini-"):
         return "gemini"
+    if model.startswith(("qwen", "qwq-", "qvq-")):
+        return "tongyi"
+    if model.startswith("grok-"):
+        return "xai"
     return ""
 
 
@@ -219,8 +232,20 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
                     stop,
                     stream,
                 )
-            return _gemini_native.invoke(
+            if family == "gemini":
+                return _gemini_native.invoke(
+                    self,
+                    model,
+                    credentials,
+                    prompt_messages,
+                    parameters,
+                    tools,
+                    stop,
+                    stream,
+                )
+            return _chat_compat.invoke(
                 self,
+                family,
                 model,
                 credentials,
                 prompt_messages,
@@ -228,19 +253,7 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
                 tools,
                 stop,
                 stream,
-            )
-        if model == "qwen-long" and any(
-            content.type == PromptMessageContentType.DOCUMENT
-            for message in prompt_messages
-            if isinstance(message.content, list)
-            for content in message.content
-        ):
-            raise InvokeBadRequestError(
-                "Tokener.ai cannot process document attachments with qwen-long. "
-                "Extract the document text and paste it into the message "
-                "instead of attaching the document. "
-                "In Workflow or Chatflow, connect a Doc Extractor node's text output "
-                "to the LLM node."
+                user,
             )
         return super()._invoke(
             model=model,
@@ -305,10 +318,13 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
             for name, value in model_parameters.items():
                 if name not in {"response_format", "json_schema"}:
                     _wire.reject_controls(value)
+            if family == "tongyi":
+                _chat_compat.normalize_deepseek_parameters(model, model_parameters)
             aliases = {
                 "openai": ("max_output_tokens", "max_tokens", "max_completion_tokens"),
                 "anthropic": ("max_tokens_to_sample", "max_tokens"),
                 "gemini": ("max_output_tokens", "max_tokens"),
+                "tongyi": ("max_completion_tokens", "max_tokens"),
             }.get(family, ())
             rules = self.get_parameter_rules(model, credentials)
             if family == "anthropic":
@@ -340,7 +356,7 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
                 credentials,
             )
             model_parameters = {**model_parameters, **validated}
-            allowed = NATIVE_FIELDS[family]
+            allowed = NATIVE_FIELDS.get(family) or CHAT_FIELDS[family]
             parameters = {
                 name: value
                 for name, value in model_parameters.items()
@@ -407,9 +423,6 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
                 else:
                     parameters["_native_response_format"] = parameters.pop("response_format")
             return parameters
-        for name, value in model_parameters.items():
-            if name not in {"response_format", "json_schema"}:
-                _wire.reject_controls(value)
         rules = self.get_parameter_rules(model, credentials)
         declared = {rule.name for rule in rules} | {
             rule.use_template for rule in rules if rule.use_template

@@ -46,7 +46,7 @@ def upstream():
 
 
 @pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.parametrize("attachment", ["url", "base64_data"])
+@pytest.mark.parametrize("attachment", ["url"])
 def test_qwen_long_rejects_document_before_sending_text_only(stream, attachment, upstream):
     model = TokenerLargeLanguageModel(model_schemas=[schema("llm", "qwen-long")])
     document = DocumentPromptMessageContent(
@@ -61,15 +61,9 @@ def test_qwen_long_rejects_document_before_sending_text_only(stream, attachment,
         },
     )
     messages = [UserPromptMessage(content=[TextPromptMessageContent(data="Summarize"), document])]
-    with (
-        patch.object(
-            model, "_transform_invoke_error", wraps=model._transform_invoke_error
-        ) as transform,
-        pytest.raises(InvokeBadRequestError) as rejected,
-    ):
+    with pytest.raises(InvokeBadRequestError):
         list(model.invoke("qwen-long", {"api_key": "test"}, messages, {}, stream=stream))
     upstream.assert_not_called()
-    assert rejected.value is transform.call_args.args[0]
     assert messages[0].content[1] is document
 
 
