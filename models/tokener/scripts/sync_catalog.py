@@ -23,7 +23,7 @@ DEFAULT_MAX_TOKENS = 8192
 ROOT = Path(__file__).resolve().parents[1]
 LLM_DIR = ROOT / "models" / "llm"
 SOURCE_ROOT = ROOT.parent if ROOT.parent.name == "models" else ROOT.parent / "models"
-MODEL_TYPES = ("llm", "text_embedding", "rerank", "tts", "speech2text")
+MODEL_TYPES = ("llm", "text_embedding", "rerank", "tts", "speech2text", "moderation")
 CATEGORY_TYPES = {
     "chat": "llm",
     "reasoning": "llm",
@@ -31,6 +31,7 @@ CATEGORY_TYPES = {
     "rerank": "rerank",
     "tts": "tts",
     "speech2text": "speech2text",
+    "moderation": "moderation",
 }
 PARAMETER_PROFILES = json.loads((ROOT / "scripts" / "parameter_profiles.json").read_text())
 
@@ -164,12 +165,13 @@ def render_catalog(payload: Any, *, model_type: str = "llm") -> dict[str, str]:
             raise CatalogError(f"unsupported model type for {model_id}: {entry_type}")
         if entry_type != model_type:
             continue
-        if model_type in {"tts", "speech2text", "text_embedding", "rerank"}:
+        if model_type in {"tts", "speech2text", "text_embedding", "rerank", "moderation"}:
             validator = {
                 "tts": catalog_media._validate_tts,
                 "speech2text": catalog_media._validate_speech2text,
                 "text_embedding": catalog_media._validate_embedding,
                 "rerank": catalog_media._validate_rerank,
+                "moderation": catalog_media._validate_identity,
             }[model_type]
             validator(raw_model)
             models.append(raw_model)
@@ -222,6 +224,7 @@ def render_catalog(payload: Any, *, model_type: str = "llm") -> dict[str, str]:
         "tts": catalog_media._render_tts,
         "text_embedding": catalog_media._render_embedding,
         "rerank": catalog_media._render_rerank,
+        "moderation": catalog_media._render_moderation,
     }[model_type]
     for model in ordered_models:
         filename = f"{quote(model['id'], safe='._-')}.yaml"

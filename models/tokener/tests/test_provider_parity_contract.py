@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from dify_plugin.entities.model import ModelType
 from dify_plugin.entities.model.message import (
     AssistantPromptMessage,
     PromptMessageTool,
@@ -164,6 +165,31 @@ def test_anthropic_cache_usage_and_adaptive_version(llm, wire, ttl, expected):
     assert chunks[-1].delta.usage.prompt_tokens == expected
 
 
+def test_openai_long_embedding_is_split_weighted_and_normalized(registry, wire):
+    _, requests, replies = wire
+    replies.append(
+        (
+            200,
+            {},
+            {
+                "data": [
+                    {"index": 1, "embedding": [0.0, 1.0]},
+                    {"index": 0, "embedding": [1.0, 0.0]},
+                ],
+                "usage": {"total_tokens": 9001},
+            },
+        )
+    )
+    embedding = registry.get_model_instance("tokener", ModelType.TEXT_EMBEDDING)
+    result = embedding.invoke("text-embedding-3-small", CREDENTIALS, ["hello " * 9000])
+    batch = requests[0][2]["input"]
+    assert all(isinstance(chunk, list) and len(chunk) <= 8191 for chunk in batch)
+    assert sum(map(len, batch)) == 9001
+    norm = (8191**2 + 810**2) ** 0.5
+    assert result.embeddings[0] == pytest.approx([8191 / norm, 810 / norm])
+    assert result.usage.tokens == 9001
+
+
 def test_source_required_defaults_reach_each_protocol(llm, wire):
     _, requests, replies = wire
     replies.extend(
@@ -241,6 +267,50 @@ def test_token_alias_keeps_source_limit_validation(llm, wire, model, alias):
     with pytest.raises((ValueError, InvokeBadRequestError)):
         invoke(llm, model, {alias: 10**10})
     assert not requests
+
+
+def test_gemini_long_embedding_counts_splits_and_merges(registry, wire, monkeypatch):
+    _, requests, replies = wire
+    embedding = registry.get_model_instance("tokener", ModelType.TEXT_EMBEDDING)
+    monkeypatch.setattr(type(embedding), "_get_context_size", lambda *args: 4)
+    replies.extend(
+        [
+            (200, {}, {"totalTokens": 5}),
+            (200, {}, {"totalTokens": 3}),
+            (200, {}, {"totalTokens": 2}),
+            (
+                200,
+                {},
+                {
+                    "embeddings": [
+                        {"values": [1.0, 0.0], "statistics": {"tokenCount": 3}},
+                        {"values": [0.0, 1.0], "statistics": {"tokenCount": 2}},
+                    ]
+                },
+            ),
+        ]
+    )
+    result = embedding.invoke("gemini-embedding-001", CREDENTIALS, ["abcde"])
+    assert [request[0] for request in requests] == [
+        "/v1beta/models/gemini-embedding-001:countTokens",
+    ] * 3 + ["/v1beta/models/gemini-embedding-001:batchEmbedContents"]
+    batch = requests[-1][2]["requests"]
+    assert [item["content"]["parts"][0]["text"] for item in batch] == ["abcd", "e"]
+    assert {item["taskType"] for item in batch} == {"RETRIEVAL_DOCUMENT"}
+    assert result.embeddings[0] == pytest.approx([3 / 13**0.5, 2 / 13**0.5])
+    assert result.usage.tokens == 5
+
+
+def test_tongyi_embedding_truncates_before_transport(registry, wire, monkeypatch):
+    _, requests, replies = wire
+    embedding = registry.get_model_instance("tokener", ModelType.TEXT_EMBEDDING)
+    monkeypatch.setattr(type(embedding), "_get_context_size", lambda *args: 4)
+    monkeypatch.setattr(type(embedding), "_get_num_tokens_by_gpt2", lambda *args: 10)
+    replies.append(
+        (200, {}, {"data": [{"index": 0, "embedding": [1, 2]}], "usage": {"total_tokens": 4}})
+    )
+    embedding.invoke("text-embedding-v4", CREDENTIALS, ["abcdefghij"])
+    assert requests[0][2]["input"] == ["abcd"]
 
 
 def test_anthropic_select_tool_preserves_source_schema_without_mutation(llm, wire):
