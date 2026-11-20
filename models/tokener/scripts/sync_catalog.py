@@ -51,11 +51,11 @@ FEATURES = (
     ("parallel_tool_calling", "multi-tool-call"),
     ("streaming_tool_calls", "stream-tool-call"),
     ("vision", "vision"),
-    ("structured_output", "structured-output"),
     ("document", "document"),
     ("video", "video"),
     ("audio", "audio"),
     ("reasoning", "agent-thought"),
+    ("structured_output", "structured-output"),
 )
 REVISION_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
 

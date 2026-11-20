@@ -1,12 +1,13 @@
 import pytest
 from dify_plugin.entities.model.message import (
+    AudioPromptMessageContent,
     DeveloperPromptMessage,
     UserPromptMessage,
 )
 from dify_plugin.errors.model import (
     InvokeConnectionError,
 )
-from protocol_http import PDF, TOOL, USER, contents, invoke, sse
+from protocol_http import PDF, TOOL, USER, chat_result, contents, invoke, sse
 from protocol_http import llm as llm
 from protocol_http import registry as registry
 from protocol_http import wire as wire
@@ -116,6 +117,19 @@ def test_responses_stream_handles_split_stop_and_drops_truncated_call(llm, wire)
     }
     assert not truncated[-1].delta.message.tool_calls
     assert all(item[0] == "/v1/responses" for item in requests)
+
+
+@pytest.mark.parametrize("model_id", ["gpt-audio-1.5", "gpt-audio-mini-2025-12-15"])
+def test_openai_audio_keeps_chat_with_audio_part(llm, wire, model_id):
+    _, requests, replies = wire
+    replies.append((200, {}, chat_result()))
+    audio = AudioPromptMessageContent(format=".wav", mime_type="audio/wav", base64_data="UklGRg==")
+    chunks = invoke(llm, model_id, messages=[UserPromptMessage(content=[audio])])
+    assert contents(chunks) == "ok"
+    assert requests[0][0] == "/v1/chat/completions"
+    assert requests[0][2]["messages"][0]["content"] == [
+        {"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "wav"}}
+    ]
 
 
 def test_openai_rejects_a_stream_without_terminal_event(llm, wire):

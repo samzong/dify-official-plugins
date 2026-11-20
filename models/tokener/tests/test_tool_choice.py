@@ -39,7 +39,13 @@ def test_public_invoke_preserves_tool_choice(stream, tool_choice) -> None:
         "usage": {"prompt_tokens": 1, "completion_tokens": 1},
     }
     response._content = json.dumps(payload).encode()
-    parameters = {"max_tokens": 10}
+    response._content_consumed = True
+    if stream:
+        response._content = (
+            b'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],'
+            b'"usage":{"prompt_tokens":1,"completion_tokens":1}}\n\n'
+        )
+    parameters = {"max_tokens": 10, "enable_thinking": False}
     if tool_choice is not _OMITTED:
         parameters["tool_choice"] = tool_choice
     original_parameters = parameters.copy()
@@ -89,7 +95,7 @@ def test_public_invoke_preserves_tool_choice(stream, tool_choice) -> None:
     assert body["stream"] is stream
     assert body["max_tokens"] == 10
     assert body["stop"] == ["END"]
-    assert body["user"] == "user-1"
+    assert "user" not in body
     assert chunks[0].delta.message.content == "ok"
     assert parameters == original_parameters
     assert credentials == {"api_key": "test-key"}
@@ -115,7 +121,7 @@ def test_public_invoke_without_tools_omits_tool_choice(tool_choice) -> None:
                 model=schema.model,
                 credentials={"api_key": "test-key"},
                 prompt_messages=[UserPromptMessage(content="Hello")],
-                model_parameters={"tool_choice": tool_choice},
+                model_parameters={"tool_choice": tool_choice, "enable_thinking": False},
                 stream=False,
             )
         )
