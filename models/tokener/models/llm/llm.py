@@ -21,6 +21,7 @@ from models._credentials import ENDPOINT_URL, validate_model_access
 from models.llm import (
     _anthropic_format,
     _anthropic_messages,
+    _gemini_native,
     _openai_responses,
     _wire,
 )
@@ -28,6 +29,7 @@ from models.llm import (
 NATIVE_FIELDS = {
     "openai": _openai_responses.FIELDS | {"seed"},
     "anthropic": _anthropic_messages.FIELDS,
+    "gemini": _gemini_native.FIELDS,
 }
 
 
@@ -39,6 +41,8 @@ def model_family(model: str) -> str:
         return "openai"
     if model.startswith("claude-"):
         return "anthropic"
+    if model.startswith("gemini-"):
+        return "gemini"
     return ""
 
 
@@ -204,7 +208,18 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
                     stream,
                     user,
                 )
-            return _anthropic_messages.invoke(
+            if family == "anthropic":
+                return _anthropic_messages.invoke(
+                    self,
+                    model,
+                    credentials,
+                    prompt_messages,
+                    parameters,
+                    tools,
+                    stop,
+                    stream,
+                )
+            return _gemini_native.invoke(
                 self,
                 model,
                 credentials,
@@ -293,6 +308,7 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
             aliases = {
                 "openai": ("max_output_tokens", "max_tokens", "max_completion_tokens"),
                 "anthropic": ("max_tokens_to_sample", "max_tokens"),
+                "gemini": ("max_output_tokens", "max_tokens"),
             }.get(family, ())
             rules = self.get_parameter_rules(model, credentials)
             if family == "anthropic":
@@ -382,7 +398,9 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
                     raise InvokeBadRequestError(f"{name} must be a boolean")
             if "response_format" in parameters:
                 value = parameters["response_format"]
-                if isinstance(value, str) and (
+                if family == "gemini" and isinstance(value, str) and value.lower() == "xml":
+                    parameters.pop("response_format")
+                elif isinstance(value, str) and (
                     value.lower() == "xml" or (family == "anthropic" and value == "JSON")
                 ):
                     parameters["response_format"] = value.upper()
@@ -461,7 +479,7 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
             )
             if count is not None:
                 return count
-        if family in ("anthropic", "openai"):
+        if family in ("anthropic", "openai", "gemini"):
             return _openai_responses.count_messages(model, prompt_messages, tools)
         return super().get_num_tokens(
             model,

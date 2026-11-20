@@ -59,6 +59,7 @@ def wire(monkeypatch):
     with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
         origin = f"http://127.0.0.1:{server.server_port}"
         monkeypatch.setattr("models._api.API_ORIGIN", origin)
+        monkeypatch.setattr("models.llm._gemini_files.API_ORIGIN", origin)
         thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
         thread.start()
         try:
