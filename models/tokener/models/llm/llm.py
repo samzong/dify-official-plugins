@@ -16,7 +16,9 @@ from dify_plugin.entities.model.message import (
 )
 from dify_plugin.errors.model import InvokeBadRequestError, InvokeError
 
+from models._api import TokenerAPIModel
 from models._credentials import ENDPOINT_URL, validate_model_access
+from models.llm import _wire
 
 
 def _has_complete_arguments(arguments: str) -> bool:
@@ -120,7 +122,10 @@ class _ToolCallStreamResponse(requests.Response):
             yield f"data: {json.dumps(payload)}"
 
 
-class TokenerLargeLanguageModel(OAICompatLargeLanguageModel):
+class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
+    def get_customizable_model_schema(self, model, credentials) -> None:
+        return None
+
     def _invoke(
         self,
         model: str,
@@ -132,6 +137,7 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel):
         stream: bool = True,
         user: str | None = None,
     ) -> LLMResult | Generator:
+        _wire.reject_controls(model_parameters, nested=False)
         if model == "qwen-long" and any(
             content.type == PromptMessageContentType.DOCUMENT
             for message in prompt_messages
@@ -157,7 +163,7 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel):
         )
 
     def _transform_invoke_error(self, error: Exception) -> InvokeError:
-        if isinstance(error, InvokeBadRequestError):
+        if isinstance(error, InvokeError):
             return error
         return super()._transform_invoke_error(error)
 
@@ -201,6 +207,10 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel):
     def _validate_and_filter_model_parameters(
         self, model: str, model_parameters: dict, credentials: dict
     ) -> dict:
+        _wire.reject_controls(model_parameters, nested=False)
+        for name, value in model_parameters.items():
+            if name not in {"response_format", "json_schema"}:
+                _wire.reject_controls(value)
         rules = self.get_parameter_rules(model, credentials)
         declared = {rule.name for rule in rules} | {
             rule.use_template for rule in rules if rule.use_template
@@ -271,7 +281,7 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel):
         )
 
     def _model_credentials(self, model: str, credentials: dict) -> dict:
-        resolved = {**credentials, "endpoint_url": ENDPOINT_URL, "mode": "chat"}
+        resolved = {"api_key": credentials["api_key"], "endpoint_url": ENDPOINT_URL, "mode": "chat"}
         schema = self.get_model_schema(model)
         if schema and {ModelFeature.TOOL_CALL, ModelFeature.MULTI_TOOL_CALL} & set(
             schema.features or []
