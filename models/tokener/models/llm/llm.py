@@ -18,10 +18,16 @@ from dify_plugin.errors.model import InvokeBadRequestError, InvokeError
 
 from models._api import TokenerAPIModel
 from models._credentials import ENDPOINT_URL, validate_model_access
-from models.llm import _openai_responses, _wire
+from models.llm import (
+    _anthropic_format,
+    _anthropic_messages,
+    _openai_responses,
+    _wire,
+)
 
 NATIVE_FIELDS = {
     "openai": _openai_responses.FIELDS | {"seed"},
+    "anthropic": _anthropic_messages.FIELDS,
 }
 
 
@@ -31,6 +37,8 @@ def model_family(model: str) -> str:
         return ""
     if base.startswith("gpt-") or (len(base) > 1 and base[0] == "o" and base[1].isdigit()):
         return "openai"
+    if model.startswith("claude-"):
+        return "anthropic"
     return ""
 
 
@@ -139,6 +147,34 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
     def get_customizable_model_schema(self, model, credentials) -> None:
         return None
 
+    def _code_block_mode_wrapper(
+        self,
+        model,
+        credentials,
+        prompt_messages,
+        model_parameters,
+        tools=None,
+        stop=None,
+        stream=True,
+        user=None,
+    ):
+        if model_family(model) != "anthropic":
+            return super()._code_block_mode_wrapper(
+                model, credentials, prompt_messages, model_parameters, tools, stop, stream, user
+            )
+        return _anthropic_format.code_block_mode(
+            self,
+            model,
+            credentials,
+            prompt_messages,
+            model_parameters,
+            tools,
+            stop,
+            stream,
+            user,
+            model.startswith(_anthropic_messages.ADAPTIVE),
+        )
+
     def _invoke(
         self,
         model: str,
@@ -152,11 +188,23 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
     ) -> LLMResult | Generator:
         _wire.reject_controls(model_parameters, nested=False)
         family = model_family(model)
-        if family == "openai":
+        if family:
             parameters = model_parameters.copy()
             if "_native_response_format" in parameters:
                 parameters["response_format"] = parameters.pop("_native_response_format")
-            return _openai_responses.invoke(
+            if family == "openai":
+                return _openai_responses.invoke(
+                    self,
+                    model,
+                    credentials,
+                    prompt_messages,
+                    parameters,
+                    tools,
+                    stop,
+                    stream,
+                    user,
+                )
+            return _anthropic_messages.invoke(
                 self,
                 model,
                 credentials,
@@ -165,7 +213,6 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
                 tools,
                 stop,
                 stream,
-                user,
             )
         if model == "qwen-long" and any(
             content.type == PromptMessageContentType.DOCUMENT
@@ -245,8 +292,14 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
                     _wire.reject_controls(value)
             aliases = {
                 "openai": ("max_output_tokens", "max_tokens", "max_completion_tokens"),
+                "anthropic": ("max_tokens_to_sample", "max_tokens"),
             }.get(family, ())
             rules = self.get_parameter_rules(model, credentials)
+            if family == "anthropic":
+                rule_names = {rule.name for rule in rules}
+                for name in ("prompt_caching_ttl", "task_budget"):
+                    if name not in rule_names:
+                        model_parameters.pop(name, None)
             target = next((rule.name for rule in rules if rule.name in aliases), None)
             if target:
                 supplied = next(
@@ -329,7 +382,9 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
                     raise InvokeBadRequestError(f"{name} must be a boolean")
             if "response_format" in parameters:
                 value = parameters["response_format"]
-                if isinstance(value, str) and value.lower() == "xml":
+                if isinstance(value, str) and (
+                    value.lower() == "xml" or (family == "anthropic" and value == "JSON")
+                ):
                     parameters["response_format"] = value.upper()
                 else:
                     parameters["_native_response_format"] = parameters.pop("response_format")
@@ -399,7 +454,14 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
         prompt_messages: list[PromptMessage],
         tools: list[PromptMessageTool] | None = None,
     ) -> int:
-        if model_family(model) == "openai":
+        family = model_family(model)
+        if family == "anthropic":
+            count = _anthropic_messages.count_tokens(
+                self, model, credentials, prompt_messages, tools
+            )
+            if count is not None:
+                return count
+        if family in ("anthropic", "openai"):
             return _openai_responses.count_messages(model, prompt_messages, tools)
         return super().get_num_tokens(
             model,

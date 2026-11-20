@@ -21,7 +21,7 @@ def test_source_rules_and_provider_mapping_are_reproducible_and_drift_is_detecte
     sync_files(generated, check=False, output_dir=tmp_path)
     assert sync_files(generated, check=True, output_dir=tmp_path)
     target = tmp_path / "claude-sonnet-5.yaml"
-    target.write_text(target.read_text().replace("default: 8192", "default: 4096"))
+    target.write_text(target.read_text().replace("default: 128000", "default: 4096"))
     assert not sync_files(generated, check=True, output_dir=tmp_path)
     target.write_text(generated[target.name])
     (tmp_path / "_provider_models.json").write_text(json.dumps({"glm-5": "openai"}))
