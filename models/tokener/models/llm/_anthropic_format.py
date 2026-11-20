@@ -11,7 +11,7 @@ def code_block_mode(
     stop,
     stream,
     user,
-    adaptive,
+    no_prefill,
 ):
     mode = model_parameters.pop("response_format", None)
     schema = model_parameters.get("json_schema")
@@ -35,12 +35,12 @@ def code_block_mode(
                     content=template + f"Please output a valid {mode} object.\n</instructions>\n"
                 ),
             )
-        if not adaptive:
+        if not no_prefill:
             prompt_messages.append(AssistantPromptMessage(content=f"\n```{mode}"))
-        if stop:
-            for marker in ("```\n", "\n```"):
-                if marker not in stop:
-                    stop.append(marker)
+        stop = list(stop or [])
+        for marker in ("```\n", "\n```"):
+            if marker not in stop:
+                stop.append(marker)
         model_parameters.pop("json_schema", None)
     return owner._invoke(
         model, credentials, prompt_messages, model_parameters, tools, stop, stream, user

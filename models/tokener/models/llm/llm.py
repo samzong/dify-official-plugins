@@ -172,7 +172,7 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
             stop,
             stream,
             user,
-            model.startswith(_anthropic_messages.ADAPTIVE),
+            model.startswith(_anthropic_messages.NO_PREFILL),
         )
 
     def _invoke(

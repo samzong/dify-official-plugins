@@ -55,6 +55,11 @@ ADAPTIVE = (
     "claude-fable-5",
     "claude-mythos-5",
 )
+NO_PREFILL = (
+    "claude-sonnet-4-6",
+    "claude-opus-4-6",
+    *ADAPTIVE,
+)
 ALWAYS_ADAPTIVE = ("claude-opus-5-5", "claude-fable-5", "claude-mythos-5")
 DEFAULT_ADAPTIVE = ("claude-sonnet-5", "claude-opus-5", "claude-haiku-5")
 OPAQUE_KEY = "anthropic_thinking"

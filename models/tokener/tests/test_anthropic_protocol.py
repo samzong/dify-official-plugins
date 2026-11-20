@@ -155,3 +155,32 @@ def test_claude_json_object_mode_adds_a_format_instruction(llm, wire):
             "text": "Return only a valid JSON object without Markdown or code fences.",
         },
     ]
+
+
+def test_claude_code_block_mode_skips_prefill_on_4_6_and_sets_stop_sequences(llm, wire):
+    _, requests, replies = wire
+    replies.extend([(200, {}, claude_result())] * 3)
+    invoke(llm, "claude-sonnet-4-6", {"response_format": "JSON", "temperature": 0.2})
+    invoke(
+        llm,
+        "claude-opus-4-6",
+        {"response_format": "JSON", "thinking": True, "thinking_budget": 1024, "max_tokens": 2048},
+    )
+    invoke(llm, "claude-sonnet-4-5-20250929", {"response_format": "JSON"})
+
+    sonnet_46, opus_46, sonnet_45 = [req[2] for req in requests]
+    assert sonnet_46["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "hello"}]}
+    ]
+    assert sonnet_46["temperature"] == 0.2
+    assert sonnet_46["stop_sequences"] == ["```\n", "\n```"]
+
+    assert opus_46["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hello"}]}]
+    assert opus_46["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert opus_46["stop_sequences"] == ["```\n", "\n```"]
+
+    assert sonnet_45["messages"][-1] == {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "\n```JSON"}],
+    }
+    assert sonnet_45["stop_sequences"] == ["```\n", "\n```"]
