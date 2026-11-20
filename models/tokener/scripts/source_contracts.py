@@ -6,7 +6,9 @@ import yaml
 from models.llm._wire import TRANSPORT_FIELDS
 from scripts.catalog_schema import CatalogError
 
-SOURCE_PROVIDERS: dict[str, str] = {}
+SOURCE_PROVIDERS = {
+    "openai": "openai",
+}
 RULE_FIELDS = {
     "name",
     "use_template",

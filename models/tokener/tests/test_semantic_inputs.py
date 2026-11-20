@@ -20,7 +20,8 @@ from dify_plugin.errors.model import InvokeBadRequestError
 
 from models.llm.llm import TokenerLargeLanguageModel
 from models.text_embedding.text_embedding import TokenerTextEmbeddingModel
-from scripts.sync_catalog import render_catalog
+from scripts.source_contracts import apply_source_contracts, load_source_contracts
+from scripts.sync_catalog import SOURCE_ROOT, render_catalog
 
 
 def schema(kind, model):
@@ -77,12 +78,34 @@ def test_qwen_long_rejects_document_before_sending_text_only(stream, attachment,
     "parameters",
     [
         {"temperature": 0.2, "top_p": 0.3, "max_tokens": 1500},
-        {"temperature": 0, "top_p": 0, "presence_penalty": -2, "frequency_penalty": 2},
-        {"temperature": 2, "top_p": 1, "presence_penalty": 0.2, "frequency_penalty": -0.4},
+        {"temperature": 0, "top_p": 0, "presence_penalty": 0, "frequency_penalty": 1},
+        {"temperature": 1, "top_p": 1, "presence_penalty": 0.2, "frequency_penalty": 0.4},
     ],
 )
-def test_gpt_4o_mini_public_invoke_preserves_supported_parameters(model_id, parameters, upstream):
+def test_gpt_4o_mini_public_invoke_follows_source_responses_contract(
+    model_id, parameters, upstream
+):
     model = TokenerLargeLanguageModel(model_schemas=[schema("llm", model_id)])
+    if any(parameters.get(name, 0) != 0 for name in ("presence_penalty", "frequency_penalty")):
+        with pytest.raises(InvokeBadRequestError):
+            list(
+                model.invoke(
+                    model_id,
+                    {"api_key": "test"},
+                    [UserPromptMessage(content="Hi")],
+                    parameters,
+                    stream=False,
+                )
+            )
+        upstream.assert_not_called()
+        return
+    upstream.return_value._content = json.dumps(
+        {
+            "status": "completed",
+            "output_text": "ok",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+    ).encode()
     list(
         model.invoke(
             model_id,
@@ -94,7 +117,11 @@ def test_gpt_4o_mini_public_invoke_preserves_supported_parameters(model_id, para
     )
     kwargs = upstream.call_args.kwargs
     body = kwargs.get("json") or json.loads(kwargs["data"])
-    assert {key: body.get(key) for key in parameters} == parameters
+    expected = {
+        ("max_output_tokens" if key == "max_tokens" else key): value
+        for key, value in parameters.items()
+    }
+    assert {key: body.get(key) for key in expected} == expected
 
 
 @pytest.mark.parametrize(
@@ -162,7 +189,10 @@ def test_catalog_sync_retains_semantic_contracts(model_id):
         "modelType": "llm",
         "mode": "chat",
         "contextSize": definition["model_properties"]["context_size"],
-        "maxOutputTokens": definition["parameter_rules"][0]["max"],
+        "maxOutputTokens": next(
+            rule["max"] for rule in definition["parameter_rules"] if rule["name"] == "max_tokens"
+        )
+        or definition["model_properties"]["context_size"],
         "capabilities": ["streaming"] + (["structured_output"] if model_id == "qwen-long" else []),
         "deprecated": False,
         "pricing": {
@@ -175,6 +205,7 @@ def test_catalog_sync_retains_semantic_contracts(model_id):
     files = render_catalog(
         {"schemaVersion": 1, "catalogRevision": f"sha256:{'a' * 64}", "models": [model]}
     )
+    apply_source_contracts(files, load_source_contracts(SOURCE_ROOT))
     generated = AIModelEntity.model_validate(yaml.safe_load(files[f"{model_id}.yaml"]))
     if model_id == "qwen-long":
         assert ModelFeature.DOCUMENT in generated.features
