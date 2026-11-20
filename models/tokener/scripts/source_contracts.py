@@ -8,6 +8,7 @@ from scripts.catalog_schema import CatalogError
 
 SOURCE_PROVIDERS = {
     "openai": "openai",
+    "gemini": "gemini",
     "anthropic": "anthropic",
 }
 RULE_FIELDS = {
