@@ -18,7 +18,20 @@ from dify_plugin.errors.model import InvokeBadRequestError, InvokeError
 
 from models._api import TokenerAPIModel
 from models._credentials import ENDPOINT_URL, validate_model_access
-from models.llm import _wire
+from models.llm import _openai_responses, _wire
+
+NATIVE_FIELDS = {
+    "openai": _openai_responses.FIELDS | {"seed"},
+}
+
+
+def model_family(model: str) -> str:
+    base = _openai_responses.base_model(model)
+    if base.startswith("gpt-audio"):
+        return ""
+    if base.startswith("gpt-") or (len(base) > 1 and base[0] == "o" and base[1].isdigit()):
+        return "openai"
+    return ""
 
 
 def _has_complete_arguments(arguments: str) -> bool:
@@ -138,6 +151,22 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
         user: str | None = None,
     ) -> LLMResult | Generator:
         _wire.reject_controls(model_parameters, nested=False)
+        family = model_family(model)
+        if family == "openai":
+            parameters = model_parameters.copy()
+            if "_native_response_format" in parameters:
+                parameters["response_format"] = parameters.pop("_native_response_format")
+            return _openai_responses.invoke(
+                self,
+                model,
+                credentials,
+                prompt_messages,
+                parameters,
+                tools,
+                stop,
+                stream,
+                user,
+            )
         if model == "qwen-long" and any(
             content.type == PromptMessageContentType.DOCUMENT
             for message in prompt_messages
@@ -208,6 +237,103 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
         self, model: str, model_parameters: dict, credentials: dict
     ) -> dict:
         _wire.reject_controls(model_parameters, nested=False)
+        family = model_family(model)
+        if family:
+            model_parameters = model_parameters.copy()
+            for name, value in model_parameters.items():
+                if name not in {"response_format", "json_schema"}:
+                    _wire.reject_controls(value)
+            aliases = {
+                "openai": ("max_output_tokens", "max_tokens", "max_completion_tokens"),
+            }.get(family, ())
+            rules = self.get_parameter_rules(model, credentials)
+            target = next((rule.name for rule in rules if rule.name in aliases), None)
+            if target:
+                supplied = next(
+                    (
+                        model_parameters[name]
+                        for name in aliases
+                        if model_parameters.get(name) is not None
+                    ),
+                    None,
+                )
+                if supplied is not None:
+                    for name in aliases:
+                        model_parameters.pop(name, None)
+                    model_parameters[target] = supplied
+            validated = super()._validate_and_filter_model_parameters(
+                model,
+                {
+                    name: value
+                    for name, value in model_parameters.items()
+                    if name not in {"response_format", "json_schema"}
+                },
+                credentials,
+            )
+            model_parameters = {**model_parameters, **validated}
+            allowed = NATIVE_FIELDS[family]
+            parameters = {
+                name: value
+                for name, value in model_parameters.items()
+                if name in allowed and value is not None
+            }
+            for name, value in parameters.items():
+                if name not in {"response_format", "json_schema"}:
+                    _wire.reject_controls(value)
+            for name in (
+                "temperature",
+                "top_p",
+                "top_k",
+                "presence_penalty",
+                "frequency_penalty",
+                "seed",
+                "thinking_budget",
+                "max_tokens",
+                "max_output_tokens",
+                "max_completion_tokens",
+            ):
+                if name in parameters and (
+                    type(parameters[name]) not in (int, float)
+                    or not math.isfinite(parameters[name])
+                ):
+                    raise InvokeBadRequestError(f"Invalid numeric parameter: {name}")
+            if (effort := parameters.get("reasoning_effort")) is not None and (
+                not isinstance(effort, str) or not effort
+            ):
+                raise InvokeBadRequestError("reasoning_effort must be a non-empty string")
+            if family == "openai" and effort not in (
+                None,
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+            ):
+                raise InvokeBadRequestError("Invalid reasoning_effort")
+            if family == "openai" and "seed" in parameters:
+                raise InvokeBadRequestError("seed requires Chat Completions")
+            for name in (
+                "enable_stream",
+                "enable_thinking",
+                "enable_search",
+                "incremental_output",
+                "include_thoughts",
+                "use_inline_file",
+                "grounding",
+                "code_execution",
+                "url_context",
+            ):
+                if name in parameters and type(parameters[name]) is not bool:
+                    raise InvokeBadRequestError(f"{name} must be a boolean")
+            if "response_format" in parameters:
+                value = parameters["response_format"]
+                if isinstance(value, str) and value.lower() == "xml":
+                    parameters["response_format"] = value.upper()
+                else:
+                    parameters["_native_response_format"] = parameters.pop("response_format")
+            return parameters
         for name, value in model_parameters.items():
             if name not in {"response_format", "json_schema"}:
                 _wire.reject_controls(value)
@@ -273,6 +399,8 @@ class TokenerLargeLanguageModel(OAICompatLargeLanguageModel, TokenerAPIModel):
         prompt_messages: list[PromptMessage],
         tools: list[PromptMessageTool] | None = None,
     ) -> int:
+        if model_family(model) == "openai":
+            return _openai_responses.count_messages(model, prompt_messages, tools)
         return super().get_num_tokens(
             model,
             self._model_credentials(model, credentials),
